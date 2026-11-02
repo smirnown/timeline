@@ -75,6 +75,9 @@ const layout = computed(() =>
             <article class="card" :style="{ width: `${CARD_WIDTH}px` }">
               <time class="dates" :datetime="item.event.start">
                 {{ formatEventDates(item.event) }}
+                <span v-if="item.event.dateNote" class="date-note">
+                  ({{ item.event.dateNote }})
+                </span>
               </time>
               <h3 class="event-title">
                 <a v-if="item.event.url" :href="item.event.url" target="_blank" rel="noopener">
@@ -194,11 +197,19 @@ const layout = computed(() =>
   opacity: 0.8;
 }
 
+.date-note {
+  font-style: italic;
+}
+
 .event-title {
   font-size: 0.95rem;
   font-weight: 600;
   line-height: 1.3;
   color: var(--color-heading);
+}
+
+.event-title a {
+  padding: 0;
 }
 
 .description {

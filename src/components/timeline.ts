@@ -6,6 +6,8 @@ export type HistoricalEvent = {
   title: string
   description: string
   url: string | null
+  /** Optional aside shown next to the dates, e.g. the date in another calendar. */
+  dateNote?: string
 }
 
 export type TimelineLayoutOptions = {
