@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import TheWelcome from '../components/TheWelcome.vue'
+import BaseTimeline from '@/components/BaseTimeline.vue'
+import { russianRevolution } from '@/data/sampleTimelines'
 </script>
 
 <template>
   <main>
-    <TheWelcome />
+    <BaseTimeline title="The Russian Revolution" :events="russianRevolution" />
   </main>
 </template>
