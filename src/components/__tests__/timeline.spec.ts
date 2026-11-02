@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { layoutTimeline, parseDay, type HistoricalEvent } from '../timeline'
+import { fitPixelsPerYear, layoutTimeline, parseDay, type HistoricalEvent } from '../timeline'
 
 const ev = (start: string, end = start, title = start): HistoricalEvent => ({
   start,
@@ -78,5 +78,43 @@ describe('layoutTimeline', () => {
     expect(months.length).toBeGreaterThan(12)
     expect(months[0]!.label).toMatch(/1917/)
     expect(months[0]!.label).not.toBe('1917')
+  })
+})
+
+describe('fitPixelsPerYear', () => {
+  const opts = { cardWidth: 200, gap: 10, padding: 20 }
+
+  it('finds the scale at which the layout exactly fills the width', () => {
+    const cases: HistoricalEvent[][] = [
+      [ev('1900-01-01'), ev('1950-06-01')],
+      [ev('1900-01-01', '1990-01-01'), ev('1910-01-01')],
+      [ev('1905-01-22', '1907-06-16'), ev('1917-03-08'), ev('1917-11-07', '1922-10-25')],
+    ]
+    for (const events of cases) {
+      for (const available of [400, 1000, 2500]) {
+        const fit = fitPixelsPerYear(events, available, opts)!
+        expect(layoutTimeline(events, { ...opts, pixelsPerYear: fit }).width).toBeCloseTo(
+          available,
+          6,
+        )
+      }
+    }
+  })
+
+  it('is limited by a long bar when it reaches past the last card', () => {
+    // 10-year bar, nothing else: the bar alone must fit in 1000 - 2·20 px.
+    const fit = fitPixelsPerYear([ev('1900-01-01', '1910-01-01')], 1000, opts)!
+    expect(
+      layoutTimeline([ev('1900-01-01', '1910-01-01')], { ...opts, pixelsPerYear: fit })
+        .lanes[0]![0]!.barWidth,
+    ).toBeCloseTo(960, 6)
+  })
+
+  it('returns Infinity when every event is on the same day', () => {
+    expect(fitPixelsPerYear([ev('1917-11-07'), ev('1917-11-07')], 1000, opts)).toBe(Infinity)
+  })
+
+  it('returns null when not even one card fits', () => {
+    expect(fitPixelsPerYear([ev('1900-01-01'), ev('1901-01-01')], 230, opts)).toBeNull()
   })
 })

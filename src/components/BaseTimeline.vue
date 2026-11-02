@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import {
   defaultLayoutOptions,
+  fitPixelsPerYear,
   formatEventDates,
   layoutTimeline,
   type HistoricalEvent,
@@ -11,28 +12,129 @@ const props = withDefaults(
   defineProps<{
     events: HistoricalEvent[]
     title?: string
-    /** Horizontal zoom: how many pixels one year takes up. */
+    /** Initial horizontal scale: how many pixels one year takes up. */
     pixelsPerYear?: number
   }>(),
   { title: undefined, pixelsPerYear: defaultLayoutOptions.pixelsPerYear },
 )
 
 const CARD_WIDTH = defaultLayoutOptions.cardWidth
+const PADDING = defaultLayoutOptions.padding
+/** Each zoom click scales the timeline by this factor. */
+const ZOOM_FACTOR = 1.5
+/** Furthest you can zoom in from the initial scale (1.5^6 ≈ 11×). */
+const MAX_ZOOM = ZOOM_FACTOR ** 6
+/** Fallback zoom-out limit when the viewport is too narrow for the whole range to fit. */
+const MIN_ZOOM_FALLBACK = 1 / MAX_ZOOM
+/** Tolerance for comparing zoom levels, to absorb floating-point drift. */
+const EPSILON = 1e-6
+
+/** Zoom relative to the `pixelsPerYear` prop: 1 is 100%. */
+const zoom = ref(1)
+watch(
+  () => props.pixelsPerYear,
+  () => (zoom.value = 1),
+)
+
+const viewport = useTemplateRef<HTMLElement>('viewport')
+/** Inner width of the scroll viewport, kept current as the window resizes. */
+const viewportWidth = ref(0)
+watch(viewport, (el, _, onCleanup) => {
+  if (!el || typeof ResizeObserver === 'undefined') {
+    return
+  }
+  const observer = new ResizeObserver(() => (viewportWidth.value = el.clientWidth))
+  observer.observe(el)
+  viewportWidth.value = el.clientWidth
+  onCleanup(() => observer.disconnect())
+})
+
+/**
+ * Zooming out stops once the whole range fits in the viewport; past that it
+ * would only add empty space. If the initial scale already fits, that's the floor.
+ */
+const minZoom = computed(() => {
+  const fit = viewportWidth.value
+    ? fitPixelsPerYear(props.events, viewportWidth.value, { cardWidth: CARD_WIDTH })
+    : null
+  return fit === null ? MIN_ZOOM_FALLBACK : Math.min(1, fit / props.pixelsPerYear)
+})
+
+const canZoomOut = computed(() => zoom.value > minZoom.value + EPSILON)
+const canZoomIn = computed(() => zoom.value < MAX_ZOOM - EPSILON)
+
+const pixelsPerYear = computed(() => props.pixelsPerYear * zoom.value)
+const zoomPercent = computed(() => Math.round(zoom.value * 100))
 
 const layout = computed(() =>
-  layoutTimeline(props.events, { pixelsPerYear: props.pixelsPerYear, cardWidth: CARD_WIDTH }),
+  layoutTimeline(props.events, { pixelsPerYear: pixelsPerYear.value, cardWidth: CARD_WIDTH }),
 )
+
+/** Zooms by `steps` clicks (negative zooms out), keeping the centred date in place. */
+function zoomBy(steps: number) {
+  setZoom(zoom.value * ZOOM_FACTOR ** steps)
+}
+
+async function setZoom(target: number) {
+  const next = Math.min(MAX_ZOOM, Math.max(minZoom.value, target))
+  if (Math.abs(next - zoom.value) < EPSILON) {
+    return
+  }
+  const el = viewport.value
+  const scale = next / zoom.value
+  // Track positions are linear in time after the left padding, so the
+  // distance from the padding to the view's centre simply scales.
+  const centre = el ? el.scrollLeft + el.clientWidth / 2 - PADDING : 0
+  zoom.value = next
+  await nextTick()
+  if (el) {
+    el.scrollLeft = centre * scale + PADDING - el.clientWidth / 2
+  }
+}
 </script>
 
 <template>
   <section class="timeline">
-    <h2 v-if="title" class="timeline-title">{{ title }}</h2>
+    <div class="timeline-header">
+      <h2 v-if="title" class="timeline-title">{{ title }}</h2>
+      <div v-if="events.length > 0" class="zoom" role="group" aria-label="Zoom">
+        <button
+          type="button"
+          aria-label="Zoom out"
+          title="Zoom out"
+          :disabled="!canZoomOut"
+          @click="zoomBy(-1)"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          class="zoom-level"
+          title="Reset zoom"
+          :aria-label="`Reset zoom (currently ${zoomPercent}%)`"
+          :disabled="Math.abs(zoom - 1) < EPSILON"
+          @click="setZoom(1)"
+        >
+          {{ zoomPercent }}%
+        </button>
+        <button
+          type="button"
+          aria-label="Zoom in"
+          title="Zoom in"
+          :disabled="!canZoomIn"
+          @click="zoomBy(1)"
+        >
+          +
+        </button>
+      </div>
+    </div>
     <p v-if="events.length === 0" class="timeline-empty">No events yet.</p>
 
     <!-- The scroll viewport: the track inside has a fixed width, so a long
          timeline scrolls sideways instead of wrapping. -->
     <div
       v-else
+      ref="viewport"
       class="viewport"
       role="region"
       tabindex="0"
@@ -104,10 +206,60 @@ const layout = computed(() =>
   margin-bottom: 2.5rem;
 }
 
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
 .timeline-title {
   color: var(--color-heading);
   font-size: 1.5rem;
-  margin-bottom: 0.75rem;
+}
+
+.zoom {
+  display: flex;
+  margin-left: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.zoom button {
+  min-width: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: var(--color-background-soft);
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.zoom button + button {
+  border-left: 1px solid var(--color-border);
+}
+
+.zoom button:hover:not(:disabled) {
+  background: var(--color-background-mute);
+}
+
+.zoom button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.zoom button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.zoom .zoom-level {
+  min-width: 3.75rem;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .viewport {

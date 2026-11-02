@@ -148,6 +148,48 @@ export function layoutTimeline(
   return { width, lanes, ticks: buildTicks(firstDay, lastDay, toX, opts) }
 }
 
+/**
+ * The largest `pixelsPerYear` at which the laid-out timeline is no wider than
+ * `availableWidth` — i.e. the scale where the whole range just fits on screen.
+ * Returns `Infinity` when any scale fits (all events on one day) and `null`
+ * when none does (too narrow for even a single card).
+ */
+export function fitPixelsPerYear(
+  events: HistoricalEvent[],
+  availableWidth: number,
+  options: Partial<TimelineLayoutOptions> = {},
+): number | null {
+  const opts = { ...defaultLayoutOptions, ...options }
+  // Mirrors layoutTimeline: width = 2·padding + max over events of
+  // (offset + max(barWidth, cardWidth)), where offset and barWidth grow
+  // linearly with the scale k (px/day). Each event therefore caps k at
+  //   card + offsetDays·k ≤ room   and   (offsetDays + lengthDays)·k ≤ room.
+  const room = availableWidth - 2 * opts.padding
+  if (events.length === 0) {
+    return Infinity
+  }
+  if (room < opts.cardWidth) {
+    return null
+  }
+  const spans = events.map((e) => {
+    const a = parseDay(e.start)
+    const b = parseDay(e.end)
+    return { startDay: Math.min(a, b), endDay: Math.max(a, b) }
+  })
+  const firstDay = Math.min(...spans.map((s) => s.startDay))
+  let maxPxPerDay = Infinity
+  for (const { startDay, endDay } of spans) {
+    const offsetDays = startDay - firstDay
+    if (offsetDays > 0) {
+      maxPxPerDay = Math.min(maxPxPerDay, (room - opts.cardWidth) / offsetDays)
+    }
+    if (endDay > firstDay) {
+      maxPxPerDay = Math.min(maxPxPerDay, room / (endDay - firstDay))
+    }
+  }
+  return maxPxPerDay * DAYS_PER_YEAR
+}
+
 function buildTicks(
   firstDay: number,
   lastDay: number,
