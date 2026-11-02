@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { fitPixelsPerYear, layoutTimeline, parseDay, type HistoricalEvent } from '../timeline'
+import {
+  eventSpan,
+  fitPixelsPerYear,
+  formatEventDates,
+  layoutTimeline,
+  parseDay,
+  type HistoricalEvent,
+} from '../timeline'
 
 const ev = (start: string, end = start, title = start): HistoricalEvent => ({
   start,
@@ -22,6 +29,60 @@ describe('parseDay', () => {
 
   it('rejects malformed dates', () => {
     expect(() => parseDay('1917/11/07')).toThrow('Invalid date')
+    expect(() => parseDay('1917')).toThrow('Invalid date')
+  })
+
+  it('rejects impossible months and days', () => {
+    expect(() => parseDay('1917-13')).toThrow('month must be 01–12')
+    expect(() => parseDay('1917-00-10')).toThrow('month must be 01–12')
+    expect(() => parseDay('1917-02-29')).toThrow('no such day')
+    expect(parseDay('1916-02-29')).toBe(parseDay('1916-03-01') - 1)
+  })
+
+  it('resolves month-only dates to the first or last day of the month', () => {
+    expect(parseDay('1917-08')).toBe(parseDay('1917-08-01'))
+    expect(parseDay('1917-08', 'end')).toBe(parseDay('1917-08-31'))
+    expect(parseDay('1916-02', 'end')).toBe(parseDay('1916-02-29'))
+    expect(parseDay('1917-08-14', 'end')).toBe(parseDay('1917-08-14'))
+  })
+})
+
+describe('eventSpan', () => {
+  it('covers whole months for month-only dates, in either order', () => {
+    const august = { startDay: parseDay('1917-08-01'), endDay: parseDay('1917-08-31') }
+    expect(eventSpan(ev('1917-08'))).toEqual(august)
+    expect(eventSpan(ev('1917-09', '1917-08'))).toEqual({
+      ...august,
+      endDay: parseDay('1917-09-30'),
+    })
+    expect(eventSpan(ev('1917-08', '1917-09-15')).endDay).toBe(parseDay('1917-09-15'))
+  })
+})
+
+describe('formatEventDates', () => {
+  const month = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+  const full = new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+
+  it('shows month-only dates without a day', () => {
+    expect(formatEventDates(ev('1917-08'))).toBe(month.format(Date.UTC(1917, 7, 1)))
+    expect(formatEventDates(ev('1917-08', '1917-10'))).toBe(
+      `${month.format(Date.UTC(1917, 7, 1))} – ${month.format(Date.UTC(1917, 9, 1))}`,
+    )
+  })
+
+  it('mixes precisions in a range', () => {
+    expect(formatEventDates(ev('1917-08', '1917-09-15'))).toBe(
+      `${month.format(Date.UTC(1917, 7, 1))} – ${full.format(Date.UTC(1917, 8, 15))}`,
+    )
   })
 })
 
@@ -59,6 +120,15 @@ describe('layoutTimeline', () => {
     expect(lanes.map((l) => l.length)).toEqual([2, 1])
   })
 
+  it('draws a month-only event as an approximate bar across the month', () => {
+    const { lanes } = layoutTimeline([ev('1917-08'), ev('1917-11-07')], opts)
+    const [august, october] = lanes.flat()
+    expect(august!.isPoint).toBe(false)
+    expect(august!.approximate).toBe(true)
+    expect(august!.barWidth).toBeCloseTo((30 * 120) / 365.2425)
+    expect(october!.approximate).toBe(false)
+  })
+
   it('accounts for long bars, not just cards, when packing', () => {
     const { lanes } = layoutTimeline([ev('1900-01-01', '1910-01-01'), ev('1905-01-01')], opts)
     expect(lanes).toHaveLength(2)
@@ -89,6 +159,7 @@ describe('fitPixelsPerYear', () => {
       [ev('1900-01-01'), ev('1950-06-01')],
       [ev('1900-01-01', '1990-01-01'), ev('1910-01-01')],
       [ev('1905-01-22', '1907-06-16'), ev('1917-03-08'), ev('1917-11-07', '1922-10-25')],
+      [ev('1917-02'), ev('1917-08', '1917-12')],
     ]
     for (const events of cases) {
       for (const available of [400, 1000, 2500]) {

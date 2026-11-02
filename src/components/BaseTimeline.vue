@@ -171,7 +171,7 @@ async function setZoom(target: number) {
           >
             <span
               class="bar"
-              :class="{ point: item.isPoint }"
+              :class="{ point: item.isPoint, approximate: item.approximate }"
               :style="item.isPoint ? undefined : { width: `${item.barWidth}px` }"
             />
             <article class="card" :style="{ width: `${CARD_WIDTH}px` }">
@@ -325,6 +325,15 @@ async function setZoom(target: number) {
   height: 6px;
   border-radius: 3px;
   background: var(--accent);
+}
+
+/* Only the month is known: fade the bar so it doesn't read as an exact range. */
+.bar.approximate {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--accent) 0 4px,
+    color-mix(in srgb, var(--accent) 35%, transparent) 4px 8px
+  );
 }
 
 .bar.point {

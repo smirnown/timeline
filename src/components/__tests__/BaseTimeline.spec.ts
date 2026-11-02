@@ -28,6 +28,22 @@ describe('BaseTimeline', () => {
     expect(wrapper.find('.event-title a').attributes('href')).toBe('https://example.com/1905')
   })
 
+  it('marks events known only to the month', () => {
+    const wrapper = mount(BaseTimeline, {
+      props: {
+        events: [
+          { ...russianRevolution[0]!, start: '1917-08', end: '1917-08', title: 'Month only' },
+          russianRevolution[2]!,
+        ],
+      },
+    })
+    const [monthOnly, exact] = wrapper.findAll('.event')
+    expect(monthOnly!.find('time').attributes('datetime')).toBe('1917-08')
+    expect(monthOnly!.find('time').text()).not.toMatch(/\d{1,2},/)
+    expect(monthOnly!.find('.bar').classes()).toContain('approximate')
+    expect(exact!.find('.bar').classes()).not.toContain('approximate')
+  })
+
   it('shows an empty state with no events', () => {
     const wrapper = mount(BaseTimeline, { props: { events: [] } })
     expect(wrapper.text()).toContain('No events yet')

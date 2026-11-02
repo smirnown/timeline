@@ -1,8 +1,14 @@
+/**
+ * An ISO calendar date: `YYYY-MM-DD`, or `YYYY-MM` when only the month is known.
+ * A month-only `start` counts from the month's first day and a month-only `end`
+ * runs to its last day, so `{ start: '1917-08', end: '1917-08' }` spans August.
+ */
+export type DateString = string
+
 export type HistoricalEvent = {
-  /** ISO calendar date, `YYYY-MM-DD` */
-  start: string
-  /** ISO calendar date, `YYYY-MM-DD`. Equal to `start` for single-day events. */
-  end: string
+  start: DateString
+  /** Equal to `start` for single-day (or single-month) events. */
+  end: DateString
   title: string
   description: string
   url: string | null
@@ -39,6 +45,8 @@ export type PlacedEvent = {
   /** Width of the event's date-range bar in px (0 for single-day events). */
   barWidth: number
   isPoint: boolean
+  /** True when either end of the event is only known to the month. */
+  approximate: boolean
 }
 
 export type Tick = { x: number; label: string }
@@ -58,13 +66,55 @@ const MIN_BAR_WIDTH = 4
 /** Candidate tick intervals, in months. */
 const TICK_STEPS = [1, 2, 3, 6, 12, 24, 60, 120, 240, 600, 1200, 6000]
 
-/** Parses `YYYY-MM-DD` into a whole number of days since 1970-01-01 (UTC). */
-export function parseDay(iso: string): number {
-  const match = /^(-?\d{1,6})-(\d{2})-(\d{2})$/.exec(iso)
+type ParsedDate = { year: number; monthIndex: number; day: number | null }
+
+function parseDate(value: DateString): ParsedDate {
+  const match = /^(-?\d{1,6})-(\d{2})(?:-(\d{2}))?$/.exec(value)
   if (!match) {
-    throw new Error(`Invalid date "${iso}", expected YYYY-MM-DD`)
+    throw new Error(`Invalid date "${value}", expected YYYY-MM-DD or YYYY-MM`)
   }
-  return dayFromParts(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const year = Number(match[1])
+  const monthIndex = Number(match[2]) - 1
+  const day = match[3] === undefined ? null : Number(match[3])
+  if (monthIndex < 0 || monthIndex > 11) {
+    throw new Error(`Invalid date "${value}": month must be 01–12`)
+  }
+  if (day !== null && (day < 1 || day > daysInMonth(year, monthIndex))) {
+    throw new Error(`Invalid date "${value}": no such day in that month`)
+  }
+  return { year, monthIndex, day }
+}
+
+function daysInMonth(year: number, monthIndex: number): number {
+  return dayFromParts(year, monthIndex + 1, 1) - dayFromParts(year, monthIndex, 1)
+}
+
+/** True for a `YYYY-MM` date, whose day isn't known. */
+export function isMonthOnly(value: DateString): boolean {
+  return parseDate(value).day === null
+}
+
+/**
+ * Parses a date into a whole number of days since 1970-01-01 (UTC). A
+ * month-only date resolves to the month's first day, or its last day when
+ * `edge` is `'end'`.
+ */
+export function parseDay(value: DateString, edge: 'start' | 'end' = 'start'): number {
+  const { year, monthIndex, day } = parseDate(value)
+  if (day !== null) {
+    return dayFromParts(year, monthIndex, day)
+  }
+  return edge === 'start'
+    ? dayFromParts(year, monthIndex, 1)
+    : dayFromParts(year, monthIndex, daysInMonth(year, monthIndex))
+}
+
+/** First and last day an event covers, tolerating `start` and `end` given in either order. */
+export function eventSpan(event: HistoricalEvent): { startDay: number; endDay: number } {
+  return {
+    startDay: Math.min(parseDay(event.start, 'start'), parseDay(event.end, 'start')),
+    endDay: Math.max(parseDay(event.start, 'end'), parseDay(event.end, 'end')),
+  }
 }
 
 function dayFromParts(year: number, monthIndex: number, day: number): number {
@@ -86,13 +136,15 @@ const fullDateFormat = new Intl.DateTimeFormat(undefined, {
   timeZone: 'UTC',
 })
 
-/** Human-readable date or date range for an event. */
+function formatDate(value: DateString): string {
+  const format = isMonthOnly(value) ? monthYearFormat : fullDateFormat
+  return format.format(parseDay(value) * MS_PER_DAY)
+}
+
+/** Human-readable date or date range for an event, e.g. "Aug 1917" or "Mar 8, 1917 – Mar 16, 1917". */
 export function formatEventDates(event: HistoricalEvent): string {
-  const start = fullDateFormat.format(parseDay(event.start) * MS_PER_DAY)
-  if (event.start === event.end) {
-    return start
-  }
-  return `${start} – ${fullDateFormat.format(parseDay(event.end) * MS_PER_DAY)}`
+  const start = formatDate(event.start)
+  return event.start === event.end ? start : `${start} – ${formatDate(event.end)}`
 }
 
 export function layoutTimeline(
@@ -105,11 +157,7 @@ export function layoutTimeline(
   }
 
   const pxPerDay = opts.pixelsPerYear / DAYS_PER_YEAR
-  const spans = events.map((event, index) => {
-    const a = parseDay(event.start)
-    const b = parseDay(event.end)
-    return { event, index, startDay: Math.min(a, b), endDay: Math.max(a, b) }
-  })
+  const spans = events.map((event, index) => ({ event, index, ...eventSpan(event) }))
   const firstDay = Math.min(...spans.map((s) => s.startDay))
   const toX = (day: number) => opts.padding + (day - firstDay) * pxPerDay
 
@@ -139,6 +187,7 @@ export function layoutTimeline(
       x,
       barWidth,
       isPoint,
+      approximate: isMonthOnly(span.event.start) || isMonthOnly(span.event.end),
     })
     laneRightEdges[lane] = right
     width = Math.max(width, right + opts.padding)
@@ -171,11 +220,7 @@ export function fitPixelsPerYear(
   if (room < opts.cardWidth) {
     return null
   }
-  const spans = events.map((e) => {
-    const a = parseDay(e.start)
-    const b = parseDay(e.end)
-    return { startDay: Math.min(a, b), endDay: Math.max(a, b) }
-  })
+  const spans = events.map(eventSpan)
   const firstDay = Math.min(...spans.map((s) => s.startDay))
   let maxPxPerDay = Infinity
   for (const { startDay, endDay } of spans) {
